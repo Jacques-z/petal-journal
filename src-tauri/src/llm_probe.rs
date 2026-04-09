@@ -25,6 +25,8 @@ const DEFAULT_PROMPT: &str =
     "The user says: Today the most draining thing was a meeting with coworkers.";
 const SYSTEM_PROMPT: &str =
     "You are a gentle journaling assistant. Ask exactly one short follow-up question. No advice. No analysis. No bullet points.";
+const DEFAULT_MAX_TOKENS: u32 = 16;
+const MAX_ALLOWED_TOKENS: u32 = 32;
 static BACKEND_INIT_LOCK: Mutex<()> = Mutex::new(());
 static BACKEND: OnceLock<LlamaBackend> = OnceLock::new();
 
@@ -171,7 +173,10 @@ pub async fn run_probe(app: AppHandle, req: RunProbeRequest) -> Result<ProbeResu
         return Err("Prompt is required.".into());
     }
 
-    let max_tokens = req.max_tokens.unwrap_or(48).clamp(8, 128) as usize;
+    let max_tokens = req
+        .max_tokens
+        .unwrap_or(DEFAULT_MAX_TOKENS)
+        .clamp(8, MAX_ALLOWED_TOKENS) as usize;
 
     tauri::async_runtime::spawn_blocking(move || {
         run_probe_blocking(&model_path, model_filename, prompt, max_tokens)
@@ -195,12 +200,21 @@ fn run_probe_blocking(
     let model = LlamaModel::load_from_file(&backend, model_path, &model_params)
         .map_err(|err| err.to_string())?;
 
+    let model_size_bytes = fs::metadata(model_path)
+        .map_err(|err| err.to_string())?
+        .len();
+    let is_large_model = model_size_bytes >= 600 * 1024 * 1024;
     let thread_count = std::thread::available_parallelism()
-        .map(|value| value.get().clamp(1, 4) as i32)
-        .unwrap_or(2);
+        .map(|value| {
+            let cap = if is_large_model { 1 } else { 2 };
+            value.get().clamp(1, cap) as i32
+        })
+        .unwrap_or(if is_large_model { 1 } else { 2 });
+    let n_ctx = if is_large_model { 256 } else { 512 };
+    let n_batch = if is_large_model { 32 } else { 64 };
     let context_params = LlamaContextParams::default()
-        .with_n_ctx(NonZeroU32::new(1024))
-        .with_n_batch(512)
+        .with_n_ctx(NonZeroU32::new(n_ctx))
+        .with_n_batch(n_batch)
         .with_n_threads(thread_count)
         .with_n_threads_batch(thread_count);
     let mut context = model
