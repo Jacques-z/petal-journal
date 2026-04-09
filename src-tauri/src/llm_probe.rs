@@ -25,8 +25,8 @@ const DEFAULT_PROMPT: &str =
     "The user says: Today the most draining thing was a meeting with coworkers.";
 const SYSTEM_PROMPT: &str =
     "You are a gentle journaling assistant. Ask exactly one short follow-up question. No advice. No analysis. No bullet points.";
-const DEFAULT_MAX_TOKENS: u32 = 16;
-const MAX_ALLOWED_TOKENS: u32 = 32;
+const DEFAULT_MAX_TOKENS: u32 = 8;
+const MAX_ALLOWED_TOKENS: u32 = 16;
 static BACKEND_INIT_LOCK: Mutex<()> = Mutex::new(());
 static BACKEND: OnceLock<LlamaBackend> = OnceLock::new();
 
@@ -196,22 +196,13 @@ fn run_probe_blocking(
 
     let model_params = LlamaModelParams::default()
         .with_n_gpu_layers(0)
-        .with_use_mmap(true);
+        .with_use_mmap(false);
     let model = LlamaModel::load_from_file(&backend, model_path, &model_params)
         .map_err(|err| err.to_string())?;
 
-    let model_size_bytes = fs::metadata(model_path)
-        .map_err(|err| err.to_string())?
-        .len();
-    let is_large_model = model_size_bytes >= 600 * 1024 * 1024;
-    let thread_count = std::thread::available_parallelism()
-        .map(|value| {
-            let cap = if is_large_model { 1 } else { 2 };
-            value.get().clamp(1, cap) as i32
-        })
-        .unwrap_or(if is_large_model { 1 } else { 2 });
-    let n_ctx = if is_large_model { 256 } else { 512 };
-    let n_batch = if is_large_model { 32 } else { 64 };
+    let thread_count = 1;
+    let n_ctx = 128;
+    let n_batch = 16;
     let context_params = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(n_ctx))
         .with_n_batch(n_batch)

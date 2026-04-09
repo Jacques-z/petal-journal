@@ -86,7 +86,7 @@ async function handleRunProbe() {
       req: {
         modelFilename: modelFilename.value,
         prompt: prompt.value,
-        maxTokens: 16,
+        maxTokens: 8,
       },
     });
   } catch (error) {
