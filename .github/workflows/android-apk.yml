@@ -1,0 +1,98 @@
+name: Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-android-apk:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_API_LEVEL: "28"
+      TAURI_ANDROID_ABIS: arm64-v8a
+      RUSTFLAGS: "-C strip=symbols"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android packages
+        run: |
+          sdkmanager "cmdline-tools;latest" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          yes | sdkmanager --licenses
+
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+
+      - name: Export Android environment
+        run: |
+          echo "ANDROID_NDK=${ANDROID_NDK_HOME}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=${ANDROID_NDK_HOME}" >> "$GITHUB_ENV"
+          echo "NDK_ROOT=${ANDROID_NDK_HOME}" >> "$GITHUB_ENV"
+          echo "NDK_HOME=${ANDROID_NDK_HOME}" >> "$GITHUB_ENV"
+          echo "ANDROID_PLATFORM=android-${ANDROID_API_LEVEL}" >> "$GITHUB_ENV"
+          echo "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev llvm-dev cmake ninja-build pkg-config
+
+      - name: Export libclang path
+        run: echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Init Android project
+        run: npx tauri android init -v
+
+      - name: Ensure internet permission
+        run: |
+          manifest="src-tauri/gen/android/app/src/main/AndroidManifest.xml"
+          if ! grep -q "android.permission.INTERNET" "$manifest"; then
+            perl -0pi -e 's#<application#<uses-permission android:name="android.permission.INTERNET" />\n\n    <application#' "$manifest"
+          fi
+          cat "$manifest"
+
+      - name: Build debug APK
+        run: npx tauri android build --debug --apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: petal-journal-android-apk
+          path: src-tauri/gen/android/app/build/outputs/apk/**/app-*-debug*.apk
+          if-no-files-found: error
