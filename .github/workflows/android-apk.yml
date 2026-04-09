@@ -1,11 +1,9 @@
 name: Android APK
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - master
-      - main
+    tags:
+      - "*"
 
 permissions:
   contents: read
@@ -71,7 +69,14 @@ jobs:
           sudo apt-get install -y clang libclang-dev llvm-dev cmake ninja-build pkg-config
 
       - name: Export libclang path
-        run: echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+        run: |
+          libclang_dir="$(dirname "$(find /usr/lib -name 'libclang.so*' | head -n 1)")"
+          if [ -z "$libclang_dir" ]; then
+            echo "libclang.so not found" >&2
+            exit 1
+          fi
+          echo "LIBCLANG_PATH=$libclang_dir" >> "$GITHUB_ENV"
+          find "$libclang_dir" -maxdepth 1 -name 'libclang.so*' -print
 
       - name: Install JS dependencies
         run: npm ci
