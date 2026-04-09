@@ -3,6 +3,7 @@ use std::{
     io::{BufWriter, Write},
     num::NonZeroU32,
     path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
     time::Instant,
 };
 
@@ -24,6 +25,8 @@ const DEFAULT_PROMPT: &str =
     "The user says: Today the most draining thing was a meeting with coworkers.";
 const SYSTEM_PROMPT: &str =
     "You are a gentle journaling assistant. Ask exactly one short follow-up question. No advice. No analysis. No bullet points.";
+static BACKEND_INIT_LOCK: Mutex<()> = Mutex::new(());
+static BACKEND: OnceLock<LlamaBackend> = OnceLock::new();
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -183,7 +186,7 @@ fn run_probe_blocking(
     prompt: String,
     max_tokens: usize,
 ) -> Result<ProbeResult, String> {
-    let backend = LlamaBackend::init().map_err(|err| err.to_string())?;
+    let backend = llama_backend()?;
     let load_started = Instant::now();
 
     let model_params = LlamaModelParams::default()
@@ -294,6 +297,29 @@ fn run_probe_blocking(
         total_ms: generation_started.elapsed().as_millis() as u64,
         devices,
     })
+}
+
+fn llama_backend() -> Result<&'static LlamaBackend, String> {
+    if let Some(backend) = BACKEND.get() {
+        return Ok(backend);
+    }
+
+    let _guard = BACKEND_INIT_LOCK
+        .lock()
+        .map_err(|_| "Llama backend init lock was poisoned.".to_string())?;
+
+    if let Some(backend) = BACKEND.get() {
+        return Ok(backend);
+    }
+
+    let backend = LlamaBackend::init().map_err(|err| err.to_string())?;
+    BACKEND
+        .set(backend)
+        .map_err(|_| "Llama backend was initialized concurrently.".to_string())?;
+
+    BACKEND
+        .get()
+        .ok_or_else(|| "Llama backend was not available after init.".to_string())
 }
 
 fn build_prompt(model: &LlamaModel, prompt: &str) -> Result<(String, bool, bool), String> {
